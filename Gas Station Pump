@@ -1,0 +1,294 @@
+//RFID
+#include <SPI.h>
+#include <MFRC522.h>
+constexpr uint8_t RST_PIN = 5;     // Configurable, see typical pin layout above
+constexpr uint8_t SS_PIN = 4;     // Configurable, see typical pin layout above
+MFRC522 rfid(SS_PIN, RST_PIN); // Instance of the class
+MFRC522::MIFARE_Key key; 
+byte nuidPICC[4];
+
+//Project Code
+int pinValue0;
+int pinValue1;
+int pinValue2;
+int pinValue3;
+int pinValue4;
+int flag;
+int relay1;
+
+//Flow Rate
+int limitType, tap_limit_value, timer1, timer2, timer3, rowIndex = 0, month_old;
+volatile byte pulseCount = 0;
+float flowRate = 0.00, waterCost, waterCost_month;
+float flowMilliLitres;
+float totalMilliLitres, totalMilliLitres_month;
+#define vPIN_TABLE                V1
+#define vPIN_TAP_LED              V7
+#define vPIN_TAP_LIMIT            V14
+#define vPIN_TAP_MANUAL           V18
+#define vPIN_TAP_ACTIVATE         V19
+#define vPIN_WATER_TOTAL          V25
+#define vPIN_WATER_TOTAL_MONTH    V21
+#define vPIN_WATER_FLOW           V26
+#define vPIN_WATER_COST           V28
+#define vPIN_WATER_COST_MONTH     V11
+#define vPIN_WATER_TAP            V27
+#define vPIN_TERMINAL             V31
+#define vPIN_LIMITMENU            V9
+#define vPIN_LAST_MONTH           V10
+#define FLOW_SENSOR               0  // D2
+#define FLOW_CALIBRATION          4.5
+#define WATER_PRICE               0.98
+
+
+//Blynk
+#define BLYNK_PRINT Serial
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+char auth[] = "g-zo8C8skr7RglPQneF7IlGRWVKscg2w";
+char ssid[] = "75fennellwest";
+char pass[] = "fennellhouse75";
+BlynkTimer timer;
+WidgetLCD lcd(V5);
+
+BLYNK_WRITE(V0){
+   pinValue0 = param.asInt(); // assigning incoming value from pin V1 to a variable
+  Serial.print("Customer requests $5 gas: ");
+  Serial.println(pinValue0);
+  lcd.clear(); //Use it to clear the LCD Widget
+  lcd.print(0, 0, "5? Please park"); // use: (position X: 0-15, position Y: 0-1, "Message you want to print")
+  lcd.print(0, 1, "at pump & Confirm");
+}
+BLYNK_WRITE(V1){
+   pinValue1 = param.asInt(); // assigning incoming value from pin V1 to a variable
+  Serial.print("Customer requests $10 gas: ");
+  Serial.println(pinValue1);
+  lcd.clear(); //Use it to clear the LCD Widget
+  lcd.print(0, 0, "10? Please park"); // use: (position X: 0-15, position Y: 0-1, "Message you want to print")
+  lcd.print(0, 1, "at pump & Confirm");
+}
+BLYNK_WRITE(V2){
+   pinValue2 = param.asInt(); // assigning incoming value from pin V1 to a variable
+  Serial.print("Customer requests $20 gas: ");
+  Serial.println(pinValue2);
+  lcd.clear(); //Use it to clear the LCD Widget
+  lcd.print(0, 0, "20? Please park"); // use: (position X: 0-15, position Y: 0-1, "Message you want to print")
+  lcd.print(0, 1, "at pump & Confirm");
+}
+BLYNK_WRITE(V3){
+   pinValue3 = param.asInt(); // assigning incoming value from pin V1 to a variable
+  Serial.print("Customer requests $50 gas: ");
+  Serial.println(pinValue3);
+  lcd.clear(); //Use it to clear the LCD Widget
+  lcd.print(0, 0, "50? Please park"); // use: (position X: 0-15, position Y: 0-1, "Message you want to print")
+  lcd.print(0, 1, "at pump & Confirm");
+}
+BLYNK_WRITE(V4){
+   pinValue4 = param.asInt(); // assigning incoming value from pin V1 to a variable
+  Serial.print("Confirm Purchase: ");
+  Serial.println(pinValue4);
+}
+
+void ICACHE_RAM_ATTR pulseCounter() {
+  pulseCount++;
+}
+
+
+void setup()
+{
+  Serial.begin(9600);
+  Blynk.begin(auth, ssid, pass);
+  lcd.clear(); //Use it to clear the LCD Widget
+  lcd.print(0, 0, "Welcome to"); // use: (position X: 0-15, position Y: 0-1, "Message you want to print")
+  lcd.print(0, 1, "Bakers got Gas");
+  timer.setInterval(1000L, checkRFID);
+  timer.setInterval(1000L, relay);
+  timer.setInterval(1000L, flowSensor);
+  pinMode(D0, OUTPUT);
+
+//Flow Rate
+ // FLOW METER
+  pulseCount        = 0;
+  flowRate          = 0.0;
+  flowMilliLitres   = 0;
+  totalMilliLitres  = 0;
+  attachInterrupt(FLOW_SENSOR, pulseCounter, FALLING);
+
+
+//RFID
+  SPI.begin(); // Init SPI bus
+  rfid.PCD_Init(); // Init MFRC522 
+    for (byte i = 0; i < 6; i++) {
+    key.keyByte[i] = 0xFF;
+  }
+  Serial.println(F("This code scan the MIFARE Classsic NUID."));
+  Serial.print(F("Using the following key:"));
+  printHex(key.keyByte, MFRC522::MF_KEY_SIZE);
+}
+
+void checkRFID()
+{
+    if ( ! rfid.PICC_IsNewCardPresent())
+    return;
+    Serial.println();
+    flag = 1;
+    Serial.println("Flag 1");
+ 
+  // Verify if the NUID has been readed
+  if ( ! rfid.PICC_ReadCardSerial())
+    return;
+ 
+  Serial.print(F("PICC type: "));
+  MFRC522::PICC_Type piccType = rfid.PICC_GetType(rfid.uid.sak);
+  Serial.println(rfid.PICC_GetTypeName(piccType));
+ 
+  // Check is the PICC of Classic MIFARE type
+  if (piccType != MFRC522::PICC_TYPE_MIFARE_MINI &&  
+    piccType != MFRC522::PICC_TYPE_MIFARE_1K &&
+    piccType != MFRC522::PICC_TYPE_MIFARE_4K) {
+    Serial.println(F("Your tag is not of type MIFARE Classic."));
+    return;
+  }
+ 
+  if (rfid.uid.uidByte[0] != nuidPICC[0] || 
+    rfid.uid.uidByte[1] != nuidPICC[1] || 
+    rfid.uid.uidByte[2] != nuidPICC[2] || 
+    rfid.uid.uidByte[3] != nuidPICC[3] ) {
+    Serial.println(F("A new card has been detected."));
+ 
+    // Store NUID into nuidPICC array
+    for (byte i = 0; i < 4; i++) {
+      nuidPICC[i] = rfid.uid.uidByte[i];
+    }
+   
+    Serial.println(F("The NUID tag is:"));
+    Serial.print(F("In hex: "));
+    printHex(rfid.uid.uidByte, rfid.uid.size);
+    Serial.println();
+    Serial.print(F("In dec: "));
+    printDec(rfid.uid.uidByte, rfid.uid.size);
+    
+
+  }
+  else Serial.println(F("Card read previously."));
+ 
+  // Halt PICC
+  rfid.PICC_HaltA();
+ 
+  // Stop encryption on PCD
+  rfid.PCD_StopCrypto1();
+}
+
+
+void relay(){
+ if (pinValue0 == 1 && pinValue4 ==1 && flag ==1)
+ {  
+  lcd.clear(); //Use it to clear the LCD Widget
+  lcd.print(4, 0, "Your gas is "); // use: (position X: 0-15, position Y: 0-1, "Message you want to print")
+  lcd.print(4, 1, "dispensing ");
+  digitalWrite(D0, LOW); 
+
+ 
+ while(waterCost << 5.00)
+  {
+  digitalWrite(D0, HIGH); 
+  Serial.println("Dispense $5 worth of gas");
+  flag = 0;
+  Serial.println("flag = 0");
+    lcd.clear(); //Use it to clear the LCD Widget
+  lcd.print(0, 0, "There she"); // use: (position X: 0-15, position Y: 0-1, "Message you want to print")
+  lcd.print(0, 1, "Blows now leave");
+  }
+ }
+ else if ( pinValue1 == 1 && pinValue4 == 1 && flag == 1)
+ {
+    digitalWrite(D0, HIGH); 
+  delay(7500);
+  digitalWrite(D0, LOW); 
+  Serial.println("Dispense $10 worth of gas");
+  flag = 0;
+ }
+ else if ( pinValue2 == 1 && pinValue4 == 1 && flag == 1)
+ {
+    digitalWrite(D0, HIGH); 
+  delay(10000);
+  digitalWrite(D0, LOW); 
+  Serial.println("Dispense $20 worth of gas");
+  flag = 0;
+ } 
+ else if ( pinValue3 == 1 && pinValue4 == 1 && flag == 1)
+ {
+   digitalWrite(D0, HIGH); 
+  delay(12000);
+  digitalWrite(D0, LOW); 
+  Serial.println("Dispense $50 worth of gas");
+  flag = 0; 
+ } 
+ 
+ else  if (pinValue0 == 1 && pinValue4 ==1)
+ {  
+  lcd.clear(); //Use it to clear the LCD Widget
+  lcd.print(0, 0, "Please park car"); // use: (position X: 0-15, position Y: 0-1, "Message you want to print")
+  lcd.print(0, 1, "on marked location");
+ }
+ else if ( pinValue1 == 1 && pinValue4 == 1)
+ {
+    lcd.clear(); //Use it to clear the LCD Widget
+  lcd.print(0, 0, "Please park car"); // use: (position X: 0-15, position Y: 0-1, "Message you want to print")
+  lcd.print(0, 1, "on marked location");
+ }
+ else if ( pinValue2 == 1 && pinValue4 == 1)
+ {
+    lcd.clear(); //Use it to clear the LCD Widget
+  lcd.print(0, 0, "Please park car"); // use: (position X: 0-15, position Y: 0-1, "Message you want to print")
+  lcd.print(0, 1, "on marked location");
+ }
+ else if ( pinValue3 == 1 && pinValue4 == 1)
+ {
+    lcd.clear(); //Use it to clear the LCD Widget
+  lcd.print(0, 0, "Please park car"); // use: (position X: 0-15, position Y: 0-1, "Message you want to print")
+  lcd.print(0, 1, "on marked location");
+ }
+}
+
+void printHex(byte *buffer, byte bufferSize) {
+  for (byte i = 0; i < bufferSize; i++) {
+    Serial.print(buffer[i] < 0x10 ? " 0" : " ");
+    Serial.print(buffer[i], HEX);
+  }
+}
+ 
+/**
+ * Helper routine to dump a byte array as dec values to Serial.
+ */
+void printDec(byte *buffer, byte bufferSize) {
+  for (byte i = 0; i < bufferSize; i++) {
+    Serial.print(buffer[i] < 0x10 ? " 0" : " ");
+    Serial.print(buffer[i], DEC);
+  }
+  }
+
+void flowSensor() {
+  detachInterrupt(FLOW_SENSOR);
+  flowRate = pulseCount / FLOW_CALIBRATION;
+  pulseCount = 0;
+  attachInterrupt(FLOW_SENSOR, pulseCounter, FALLING);
+  //calc totals
+  flowMilliLitres = (flowRate / 60) * 1000;
+  totalMilliLitres += flowMilliLitres;
+  totalMilliLitres_month += flowMilliLitres;
+  Blynk.virtualWrite(vPIN_WATER_TOTAL, (float)totalMilliLitres / 1000);
+  Blynk.virtualWrite(vPIN_WATER_FLOW,  String((float)flowMilliLitres, 0));
+  Blynk.virtualWrite(vPIN_WATER_TOTAL_MONTH, (float)totalMilliLitres_month / 1000);
+  waterCost = waterCost + ( ( ( (float)flowMilliLitres / 1000 ) * WATER_PRICE ) / 100);
+  Blynk.virtualWrite(vPIN_WATER_COST, String(waterCost, 6));
+  waterCost_month = waterCost_month + ( ( ( (float)flowMilliLitres / 1000 ) * WATER_PRICE ) / 100);
+  Blynk.virtualWrite(vPIN_WATER_COST_MONTH, String(waterCost_month, 6)); 
+}
+
+void loop()
+{
+  Blynk.run();
+  timer.run();
+  Serial.println(waterCost);
+}
